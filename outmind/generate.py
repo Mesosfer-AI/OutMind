@@ -86,3 +86,31 @@ def generate_stream(
         # Step KV-cache forward with single next-token input
         start_pos += curr_input.shape[1]
         curr_input = torch.tensor([[next_token]], dtype=torch.long, device=device)
+
+
+def generate(
+    model: OutMindForCausalLM,
+    tokenizer: OutMindTokenizer,
+    prompt: str,
+    max_new_tokens: int = 256,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+    top_k: int = 50,
+    stop_tokens: Optional[List[int]] = None,
+    device: Optional[str] = None,
+) -> str:
+    """Non-streaming autoregressive text generation returning full response string."""
+    if device is not None:
+        model.to(device)
+    chunks = list(generate_stream(
+        model=model,
+        tokenizer=tokenizer,
+        prompt=prompt,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        stop_tokens=stop_tokens,
+    ))
+    return "".join(chunks)
+

@@ -75,6 +75,42 @@ class OutMindConfig:
         return cfg
 
     @classmethod
+    def medium(cls, **kwargs) -> "OutMindConfig":
+        """Mid-size balanced preset (~246M parameters) for workstations and multi-task learning."""
+        cfg = cls(
+            vocab_size=64000,
+            d_model=1024,
+            n_layers=16,
+            n_heads=16,
+            n_kv_heads=4,
+            d_ffn=2816,
+            max_seq_len=2048,
+            use_moe=False,
+            tie_word_embeddings=True,
+        )
+        for k, v in kwargs.items():
+            setattr(cfg, k, v)
+        return cfg
+
+    @classmethod
+    def large(cls, **kwargs) -> "OutMindConfig":
+        """High-capacity flagship SLM preset (~693M parameters) for production edge deployment."""
+        cfg = cls(
+            vocab_size=64000,
+            d_model=1536,
+            n_layers=24,
+            n_heads=16,
+            n_kv_heads=4,
+            d_ffn=4096,
+            max_seq_len=2048,
+            use_moe=False,
+            tie_word_embeddings=True,
+        )
+        for k, v in kwargs.items():
+            setattr(cfg, k, v)
+        return cfg
+
+    @classmethod
     def moe(cls, **kwargs) -> "OutMindConfig":
         """Sparse MoE preset (~122M total / ~49M active parameters)."""
         cfg = cls(
@@ -94,3 +130,4 @@ class OutMindConfig:
         for k, v in kwargs.items():
             setattr(cfg, k, v)
         return cfg
+

@@ -522,7 +522,7 @@ def main():
     parser.add_argument("--stage", type=str, choices=["all", "tokenizer", "pretrain", "sft"], default="all")
     parser.add_argument("--eval-tokenizer", action="store_true", help="Shortcut to evaluate tokenizer only")
     parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint (.pt)")
-    parser.add_argument("--preset", type=str, choices=["nano", "small", "moe"], default="nano")
+    parser.add_argument("--preset", type=str, choices=["nano", "small", "medium", "large", "moe"], default="nano")
     parser.add_argument("--vocab-file", type=str, default=None, help="Custom BPE model file path")
     parser.add_argument("--eval-file", type=str, default=None, help="Evaluation dataset file (txt or jsonl)")
     parser.add_argument("--benchmark", type=str, default="all", choices=["all", "gsm8k", "humaneval", "mmlu", "tydiqa", "glaive"])
@@ -552,15 +552,32 @@ def main():
         model = OutMindForCausalLM(cfg)
         if args.checkpoint and os.path.exists(args.checkpoint):
             ckpt = torch.load(args.checkpoint, map_location=args.device)
-            state_dict = ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt
+            state_dict = ckpt.get("model_state") or ckpt.get("model_state_dict") or ckpt
             model.load_state_dict(state_dict)
             print(f"[OutMind] Loaded checkpoint: {args.checkpoint}")
         model.to(args.device)
 
         if args.stage in ["all", "pretrain"] and args.eval_file and os.path.exists(args.eval_file):
             print("\n--- Running Pretrain Evaluation ---")
-            with open(args.eval_file, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f if line.strip()]
+            if os.path.isdir(args.eval_file) or args.eval_file.endswith(".parquet"):
+                import pyarrow.parquet as pq
+                pfs = [os.path.join(args.eval_file, f) for f in os.listdir(args.eval_file) if f.endswith(".parquet")] if os.path.isdir(args.eval_file) else [args.eval_file]
+                lines = []
+                for pf in pfs:
+                    pfile = pq.ParquetFile(pf)
+                    for batch in pfile.iter_batches(batch_size=500, columns=["text"]):
+                        for t in batch["text"].to_pylist():
+                            if t and len(t) > 50:
+                                lines.append(t)
+                                if len(lines) >= 100:
+                                    break
+                        if len(lines) >= 100:
+                            break
+                    if len(lines) >= 100:
+                        break
+            else:
+                with open(args.eval_file, "r", encoding="utf-8") as f:
+                    lines = [line.strip() for line in f if line.strip()]
             ppl = eval_pretrain_perplexity(model, tokenizer, lines, device=args.device)
             print(f"[OutMind] Validation Perplexity (PPL): {ppl:.2f}")
 
