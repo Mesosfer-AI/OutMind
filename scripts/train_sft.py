@@ -88,7 +88,8 @@ def main():
     else:
         if not args.data_path or not os.path.exists(args.data_path):
             raise FileNotFoundError(f"SFT data path not found: {args.data_path}")
-        dialogues = load_dialogues_from_path(args.data_path)
+        needed_samples = int(args.max_steps * args.batch_size * 1.3)
+        dialogues = load_dialogues_from_path(args.data_path, max_samples=needed_samples)
         cfg = getattr(OutMindConfig, args.preset)(vocab_size=tokenizer.vocab_size)
         dataset = SFTDataset(dialogues, tokenizer, max_seq_len=cfg.max_seq_len)
         trainer_cfg = TrainerConfig(max_steps=args.max_steps, checkpoint_dir=args.checkpoint_dir)

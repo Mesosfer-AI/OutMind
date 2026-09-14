@@ -158,12 +158,17 @@ def step_pretrain(
 
     tok = OutMindTokenizer(vocab_file=tokenizer_path)
     pretrain_data_path = os.path.join(data_dir, "pretrain", "train")
+    cfg = getattr(OutMindConfig, preset)(vocab_size=tok.vocab_size)
 
-    print(f"[OutMind Pipeline] Tokenizing pretrain stream from '{pretrain_data_path}'...")
+    if max_tokens is None:
+        tokens_per_step = batch_size * (cfg.max_seq_len + 1)
+        max_tokens = max(5_000_000, int(max_steps * tokens_per_step * 1.25))
+
+    budget_desc = f"{max_tokens:,} tokens" if max_tokens else "unlimited tokens"
+    print(f"[OutMind Pipeline] Tokenizing pretrain stream from '{pretrain_data_path}' (target budget: {budget_desc})...")
     tokens = load_tokens_from_path(pretrain_data_path, tok, max_tokens=max_tokens)
     print(f"[OutMind Pipeline] Loaded {len(tokens):,} pretraining tokens.")
 
-    cfg = getattr(OutMindConfig, preset)(vocab_size=tok.vocab_size)
     dataset = PretrainDataset(tokens, max_seq_len=cfg.max_seq_len)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
@@ -255,7 +260,11 @@ def step_train_sft(
     tok = OutMindTokenizer(vocab_file=tokenizer_path)
     sft_data_path = os.path.join(data_dir, "sft", "train")
 
-    print(f"[OutMind Pipeline] Loading ChatML dialogues from '{sft_data_path}'...")
+    if max_samples is None:
+        max_samples = max(2_000, int(max_steps * batch_size * 1.3))
+
+    budget_desc = f"{max_samples:,} dialogues" if max_samples else "unlimited dialogues"
+    print(f"[OutMind Pipeline] Loading ChatML dialogues from '{sft_data_path}' (target budget: {budget_desc})...")
     dialogues = load_dialogues_from_path(sft_data_path, max_samples=max_samples)
     print(f"[OutMind Pipeline] Loaded {len(dialogues):,} conversation dialogues.")
 
@@ -366,8 +375,16 @@ def run_pipeline(
     if batch_size is None:
         batch_size = 2 if is_quick else (4 if preset in ["nano", "small"] else 8)
 
-    max_tokens = 50000 if is_quick else None
-    max_sft_samples = 200 if is_quick else None
+    cfg_tmp = getattr(OutMindConfig, preset)()
+    if is_quick:
+        max_tokens = 50000
+        max_sft_samples = 200
+    else:
+        # Calculate tokens needed for steps + 25% safety buffer for shuffling/batching
+        tokens_needed = int(pretrain_steps * batch_size * (cfg_tmp.max_seq_len + 1) * 1.25)
+        # Minimum 5M tokens to ensure rich corpus diversity while keeping RAM usage < 1 GB
+        max_tokens = max(5_000_000, tokens_needed)
+        max_sft_samples = max(2_000, int(sft_steps * batch_size * 1.3))
 
     # 1. Download / Verify Data
     data_dir = step_download_data(

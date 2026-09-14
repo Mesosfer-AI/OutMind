@@ -15,7 +15,7 @@ from outmind.trainer import Trainer, TrainerConfig
 
 
 def load_tokens_from_path(data_path: str, tokenizer: OutMindTokenizer, max_tokens: Optional[int] = None) -> List[int]:
-    """Loads token stream from raw text file, parquet file, or parquet directory."""
+    """Loads token stream from raw text file, parquet file, or parquet directory with memory budgeting."""
     if os.path.isdir(data_path) or data_path.endswith(".parquet"):
         import pyarrow.parquet as pq
         parquet_files = []
@@ -29,19 +29,25 @@ def load_tokens_from_path(data_path: str, tokenizer: OutMindTokenizer, max_token
             parquet_files = [data_path]
 
         tokens: List[int] = []
+        last_logged = 0
         for pf in parquet_files:
             pfile = pq.ParquetFile(pf)
             for batch in pfile.iter_batches(batch_size=1000, columns=["text"]):
                 for text in batch["text"].to_pylist():
                     if text:
                         tokens.extend(tokenizer.encode(text))
+                        if len(tokens) - last_logged >= 5_000_000:
+                            last_logged = len(tokens)
+                            target_str = f" / {max_tokens:,}" if max_tokens else ""
+                            print(f"[OutMind] Streamed {len(tokens):,}{target_str} tokens into memory...", flush=True)
                         if max_tokens and len(tokens) >= max_tokens:
-                            return tokens
+                            return tokens[:max_tokens]
         return tokens
     else:
         with open(data_path, "r", encoding="utf-8") as f:
             text = f.read()
-        return tokenizer.encode(text)
+        tokens = tokenizer.encode(text)
+        return tokens[:max_tokens] if max_tokens else tokens
 
 
 def main():
@@ -66,8 +72,9 @@ def main():
     else:
         if not args.data_path or not os.path.exists(args.data_path):
             raise FileNotFoundError(f"Data path not found: {args.data_path}")
-        tokens = load_tokens_from_path(args.data_path, tokenizer)
         cfg = getattr(OutMindConfig, args.preset)(vocab_size=tokenizer.vocab_size)
+        needed_tokens = int(args.max_steps * args.batch_size * (cfg.max_seq_len + 1) * 1.25)
+        tokens = load_tokens_from_path(args.data_path, tokenizer, max_tokens=needed_tokens)
         dataset = PretrainDataset(tokens, max_seq_len=cfg.max_seq_len)
         trainer_cfg = TrainerConfig(max_steps=args.max_steps, checkpoint_dir=args.checkpoint_dir)
 
