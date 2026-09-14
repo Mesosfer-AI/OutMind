@@ -26,12 +26,16 @@ def main():
     parser.add_argument("--device", type=str, default="auto", help="'auto', 'cuda', or 'cpu'")
     parser.add_argument("--force-download", action="store_true", help="Redownload dataset from Hugging Face")
     parser.add_argument("--retrain-tokenizer", action="store_true", help="Retrain BPE tokenizer from scratch")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=None, help="Gradient accumulation steps")
+    parser.add_argument("--gradient-checkpointing", action="store_true", default=True, help="Enable activation checkpointing")
+    parser.add_argument("--no-gradient-checkpointing", action="store_false", dest="gradient_checkpointing", help="Disable activation checkpointing")
     args = parser.parse_args()
 
-    # Optimized defaults for Medium
+    # Optimized defaults for Medium (Micro-batch 2 + Grad Accum 4 = Effective Batch 8)
     default_pretrain = 10 if args.mode == "quick" else 5000
     default_sft = 5 if args.mode == "quick" else 2000
-    default_bs = 2 if args.mode == "quick" else 8
+    default_bs = 2
+    default_grad_accum = 1 if args.mode == "quick" else 4
 
     run_pipeline(
         preset="medium",
@@ -39,6 +43,8 @@ def main():
         pretrain_steps=args.pretrain_steps or default_pretrain,
         sft_steps=args.sft_steps or default_sft,
         batch_size=args.batch_size or default_bs,
+        gradient_accumulation_steps=args.gradient_accumulation_steps or default_grad_accum,
+        gradient_checkpointing=args.gradient_checkpointing,
         device=args.device,
         force_download=args.force_download,
         skip_tokenizer_train=not args.retrain_tokenizer,

@@ -20,6 +20,7 @@ class OutMindConfig:
     rms_norm_eps: float = 1e-6
     dropout_p: float = 0.0
     tie_word_embeddings: bool = True
+    gradient_checkpointing: bool = False
     
     # Sparse Mixture-of-Experts (MoE) settings
     use_moe: bool = False

@@ -255,7 +255,19 @@ class OutMindForCausalLM(nn.Module):
         present_kvs = []
         for i, layer in enumerate(self.layers):
             layer_past_kv = past_kvs[i] if past_kvs is not None else None
-            x, present_kv = layer(x, self.rope, past_kv=layer_past_kv, start_pos=start_pos)
+            if self.training and self.config.gradient_checkpointing and layer_past_kv is None:
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+                    return custom_forward
+                x, present_kv = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(layer),
+                    x,
+                    self.rope,
+                    use_reentrant=False,
+                )
+            else:
+                x, present_kv = layer(x, self.rope, past_kv=layer_past_kv, start_pos=start_pos)
             present_kvs.append(present_kv)
 
         x = self.norm(x)
@@ -264,11 +276,9 @@ class OutMindForCausalLM(nn.Module):
         loss = None
         if labels is not None:
             # Autoregressive causal language modeling loss: predict token t+1 from position t
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
             loss = F.cross_entropy(
-                shift_logits.view(-1, self.config.vocab_size),
-                shift_labels.view(-1),
+                logits[..., :-1, :].reshape(-1, self.config.vocab_size),
+                labels[..., 1:].reshape(-1),
                 ignore_index=-100,
             )
 

@@ -153,15 +153,20 @@ def step_pretrain(
     device: str = "auto",
     checkpoint_dir: str = "checkpoints",
     max_tokens: Optional[int] = None,
+    gradient_accumulation_steps: int = 1,
+    gradient_checkpointing: bool = False,
 ) -> str:
     log_phase(4, 7, f"Pretraining OutMind-{preset.upper()} ({max_steps} steps)")
 
     tok = OutMindTokenizer(vocab_file=tokenizer_path)
     pretrain_data_path = os.path.join(data_dir, "pretrain", "train")
-    cfg = getattr(OutMindConfig, preset)(vocab_size=tok.vocab_size)
+    cfg = getattr(OutMindConfig, preset)(
+        vocab_size=tok.vocab_size,
+        gradient_checkpointing=gradient_checkpointing,
+    )
 
     if max_tokens is None:
-        tokens_per_step = batch_size * (cfg.max_seq_len + 1)
+        tokens_per_step = batch_size * gradient_accumulation_steps * (cfg.max_seq_len + 1)
         max_tokens = max(5_000_000, int(max_steps * tokens_per_step * 1.25))
 
     budget_desc = f"{max_tokens:,} tokens" if max_tokens else "unlimited tokens"
@@ -178,11 +183,14 @@ def step_pretrain(
         save_every=max(1, max_steps // 2),
         checkpoint_dir=checkpoint_dir,
         device=device,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     model = OutMindForCausalLM(cfg)
     total_params = sum(p.numel() for p in model.parameters())
+    effective_bs = batch_size * gradient_accumulation_steps
     print(f"[OutMind Pipeline] Architecture: {preset} | Total Parameters: {total_params:,}")
+    print(f"[OutMind Pipeline] Training Settings: Micro-Batch = {batch_size}, Grad Accum = {gradient_accumulation_steps} (Effective Batch = {effective_bs}), Grad Checkpointing = {gradient_checkpointing}")
 
     trainer = Trainer(model, trainer_cfg)
     trainer.train(dataloader)
@@ -254,6 +262,8 @@ def step_train_sft(
     device: str = "auto",
     checkpoint_dir: str = "checkpoints",
     max_samples: Optional[int] = None,
+    gradient_accumulation_steps: int = 1,
+    gradient_checkpointing: bool = False,
 ) -> str:
     log_phase(6, 7, f"Supervised Fine-Tuning (SFT) on ChatML ({max_steps} steps)")
 
@@ -261,14 +271,18 @@ def step_train_sft(
     sft_data_path = os.path.join(data_dir, "sft", "train")
 
     if max_samples is None:
-        max_samples = max(2_000, int(max_steps * batch_size * 1.3))
+        effective_bs = batch_size * gradient_accumulation_steps
+        max_samples = max(2_000, int(max_steps * effective_bs * 1.3))
 
     budget_desc = f"{max_samples:,} dialogues" if max_samples else "unlimited dialogues"
     print(f"[OutMind Pipeline] Loading ChatML dialogues from '{sft_data_path}' (target budget: {budget_desc})...")
     dialogues = load_dialogues_from_path(sft_data_path, max_samples=max_samples)
     print(f"[OutMind Pipeline] Loaded {len(dialogues):,} conversation dialogues.")
 
-    cfg = getattr(OutMindConfig, preset)(vocab_size=tok.vocab_size)
+    cfg = getattr(OutMindConfig, preset)(
+        vocab_size=tok.vocab_size,
+        gradient_checkpointing=gradient_checkpointing,
+    )
     dataset = SFTDataset(dialogues, tok, max_seq_len=cfg.max_seq_len)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
@@ -278,6 +292,7 @@ def step_train_sft(
         save_every=max(1, max_steps // 2),
         checkpoint_dir=checkpoint_dir,
         device=device,
+        gradient_accumulation_steps=gradient_accumulation_steps,
     )
 
     model = OutMindForCausalLM(cfg)
@@ -354,6 +369,8 @@ def run_pipeline(
     force_download: bool = False,
     skip_tokenizer_train: bool = True,
     checkpoint_dir: str = "checkpoints",
+    gradient_accumulation_steps: Optional[int] = None,
+    gradient_checkpointing: Optional[bool] = None,
 ):
     if hasattr(sys.stdout, "reconfigure"):
         try:
@@ -373,18 +390,23 @@ def run_pipeline(
     if sft_steps is None:
         sft_steps = 5 if is_quick else (250 if preset == "nano" else 1000)
     if batch_size is None:
-        batch_size = 2 if is_quick else (4 if preset in ["nano", "small"] else 8)
+        batch_size = 2 if is_quick else (2 if preset in ["small", "medium"] else (1 if preset == "large" else 4))
+    if gradient_accumulation_steps is None:
+        gradient_accumulation_steps = 1 if is_quick else (2 if preset in ["small", "medium", "large"] else 1)
+    if gradient_checkpointing is None:
+        gradient_checkpointing = False if is_quick else (True if preset in ["small", "medium", "large"] else False)
 
+    effective_bs = batch_size * gradient_accumulation_steps
     cfg_tmp = getattr(OutMindConfig, preset)()
     if is_quick:
         max_tokens = 50000
         max_sft_samples = 200
     else:
         # Calculate tokens needed for steps + 25% safety buffer for shuffling/batching
-        tokens_needed = int(pretrain_steps * batch_size * (cfg_tmp.max_seq_len + 1) * 1.25)
+        tokens_needed = int(pretrain_steps * effective_bs * (cfg_tmp.max_seq_len + 1) * 1.25)
         # Minimum 5M tokens to ensure rich corpus diversity while keeping RAM usage < 1 GB
         max_tokens = max(5_000_000, tokens_needed)
-        max_sft_samples = max(2_000, int(sft_steps * batch_size * 1.3))
+        max_sft_samples = max(2_000, int(sft_steps * effective_bs * 1.3))
 
     # 1. Download / Verify Data
     data_dir = step_download_data(
@@ -414,6 +436,8 @@ def run_pipeline(
         device=device,
         checkpoint_dir=checkpoint_dir,
         max_tokens=max_tokens,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        gradient_checkpointing=gradient_checkpointing,
     )
 
     # 5. Evaluate Pretrained Model
@@ -436,6 +460,8 @@ def run_pipeline(
         device=device,
         checkpoint_dir=checkpoint_dir,
         max_samples=max_sft_samples,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        gradient_checkpointing=gradient_checkpointing,
     )
 
     # 7. Evaluate SFT Model
